@@ -1,98 +1,107 @@
-# 🚗 Drowsiness Detection & Alert System (Python + Arduino + Firebase)
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Firebase_ESP_Client.h>
 
+// Wi-Fi credentials
+const char* ssid = "vivo Y56 5G";
+const char* password = "87654321";
 
-This project integrates **Python (OpenCV + Dlib)**, **Arduino**, and **Firebase** to enhance road safety by detecting driver drowsiness and monitoring vehicles.
+// Firebase credentials
+#define FIREBASE_HOST "https://comms-project-27524-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define FIREBASE_AUTH "ZX83opRiRn2f3GXqBfKaVUkqEo2borzxFI0GtL0S"
 
-## 🚗 Features
-- **Face and Eye Detection**  
-  Uses OpenCV Haarcascade classifiers (`haarcascade_frontalface_default.xml`, `haarcascade_eye.xml`) and Dlib’s `shape_predictor_68_face_landmarks.dat` for real-time detection.
+// Firebase objects
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+WebServer server(80);  // HTTP server on port 80
+
+// Function to handle alerts sent by the Python script
+void handleAlert() {
+  String carID = server.arg("car");  // Get car ID from request
+  String message = server.arg("message");  // Get message from request
+
   
-- **Drowsiness Detection**  
-  Calculates **Eye Aspect Ratio (EAR)** to identify prolonged eye closure, signaling possible drowsiness.
 
-- **Alert System**  
-  - Triggers a buzzer/alarm via Arduino.  
-  - Sends warning notifications to **Firebase**.
+  // Firebase path for storing alert message
+  String path = "/alerts/" + carID + "/message";  
 
-- **Multiple Vehicle Detection**  
-  Detects multiple vehicles in camera view and flags risky driver behavior.
+  if (Firebase.RTDB.setString(&fbdo, path.c_str(), message.c_str())) {
+    Serial.println("Alert sent to Firebase successfully!");
+  } else {
+    Serial.println("Firebase Write Error: " + fbdo.errorReason());
+  }
 
-- **Firebase Integration**  
-  Uploads driver status (**Normal / Drowsy / Alert**) to Firebase Realtime Database for cloud-based monitoring.
+  // Respond to the Python script
+  server.send(200, "text/plain", "Alert received: " + message);
+}
 
+// Function to read messages from Firebase for both Car_A and Car_B
+void readAlertMessages() {
+  String cars[] = {"Car_A", "Car_B"};
+  
+  for (int i = 0; i < 2; i++) {
+    String carID = cars[i];
+    String path = "/alerts/" + carID + "/message";
 
+    if (Firebase.RTDB.getString(&fbdo, path.c_str())) {
+      String message = fbdo.stringData();
+      
 
-## 📂 Required Files
-Make sure you have these files before running:
+      // Check if Drowsiness is detected
+      if (message == "Drowsiness Detected!") {
+        Serial.print("ALERT! ");
+        Serial.print(carID);
+        Serial.println(" detected drowsiness!");
+      }
+    } else {
+      Serial.print("Firebase Read Error for ");
+      Serial.print(carID);
+      Serial.print(": ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}
 
-1. **Facial Landmark Model (68 points)**  
-   - [Download shape_predictor_68_face_landmarks.dat](https://huggingface.co/matt3ounstable/dlib_predictor_recognition/resolve/main/shape_predictor_68_face_landmarks.dat)
+void setup() {
+  Serial.begin(115200);
 
-2. **Haarcascade Models (Face & Eyes)**  
-   - [haarcascade_frontalface_default.xml]
-   - [haarcascade_eye.xml]
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to Wi-Fi");
+  Serial.print("ESP32 IP Address: ");
+  Serial.println(WiFi.localIP());
 
-Or download them from your repo’s `models/` folder if uploaded.
+  // Configure Firebase
+  config.database_url = FIREBASE_HOST;
+  config.signer.tokens.legacy_token = FIREBASE_AUTH;
 
----
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
 
-## ⚙️ Installation
+  // Test Firebase connection
+  if (Firebase.RTDB.setString(&fbdo, "/test", "Hello Firebase!")) {
+    Serial.println("Firebase test write successful!");
+  } else {
+    Serial.println("Firebase test failed: " + fbdo.errorReason());
+  }
 
+  // Set up the alert route
+  server.on("/alert", HTTP_GET, handleAlert);
 
-### 🔹 Arduino Setup
+  // Start the web server
+  server.begin();
+}
 
-* Use an **Arduino Uno/Nano** with a buzzer or relay module.
-* Upload the provided `arduino_alert.ino` code from this repo to your Arduino using Arduino IDE.
-* Connect Arduino via USB for serial communication.
+void loop() {
+  server.handleClient();  // Listen for incoming HTTP requests
 
----
-
-## ▶️ Usage
-
-```bash
-python drowsiness_detection.py
-```
-
-* The system captures video from webcam.
-* If eyes remain closed beyond a threshold → **Alert is triggered**.
-* An alert is sent to **Arduino** → buzzer/alarm sounds.
-* Detection data is uploaded to **Firebase**.
-
----
-
-## 🔗 Firebase Setup
-
-1. Create a **Firebase project**.
-2. Download the `serviceAccountKey.json` file.
-3. Place it in your project root.
-4. Configure `firebase_admin` in your Python script.
-
----
-
-## 📊 Workflow
-
-1. **Face Detection** → Haarcascade (`.xml` files).
-2. **Facial Landmarks** → `shape_predictor_68_face_landmarks.dat`.
-3. **Eye Aspect Ratio (EAR)** → Determines drowsiness.
-4. **Alert Trigger** → Arduino buzzer + Firebase log.
-
----
-
-## 📷 System Architecture
-
-```
-[ Webcam ] → [ Python (OpenCV + dlib) ] → [ Drowsiness Detection ] 
-      → [ Alert Signal → Arduino ] 
-      → [ Log Data → Firebase ]
-```
-
----
-
-## ⚠️ Alert Levels
-
-* **Level 1:** Eyes closed briefly → Warning.
-* **Level 2:** Eyes closed continuously → Arduino buzzer ON + Firebase Alert.
-
----
-
-
+  // Read the latest alert message from Firebase every 5 seconds
+  readAlertMessages();
+  delay(5000);
+}
